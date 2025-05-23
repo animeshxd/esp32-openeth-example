@@ -8,11 +8,81 @@
 #include "esp_eth.h"
 #include "esp_netif.h"
 #include "esp_http_server.h"
+#include "esp_http_client.h"
 
 static const char *TAG = "eth_example";
 static httpd_handle_t server = NULL;
 static esp_netif_ip_info_t current_ip_info = {0};
 static uint8_t current_mac[6] = {0};
+static char http_response_buffer[1024] = {0};
+
+// HTTP client event handler
+esp_err_t http_event_handler(esp_http_client_event_t *evt)
+{
+    switch(evt->event_id) {
+        case HTTP_EVENT_ERROR:
+            ESP_LOGD(TAG, "HTTP_EVENT_ERROR");
+            break;
+        case HTTP_EVENT_ON_CONNECTED:
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_CONNECTED");
+            break;
+        case HTTP_EVENT_HEADER_SENT:
+            ESP_LOGD(TAG, "HTTP_EVENT_HEADER_SENT");
+            break;
+        case HTTP_EVENT_ON_HEADER:
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_HEADER, key=%s, value=%s", evt->header_key, evt->header_value);
+            break;
+        case HTTP_EVENT_ON_DATA:
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_DATA, len=%d", evt->data_len);
+            if (!esp_http_client_is_chunked_response(evt->client)) {
+                // Copy response data to buffer (limit to buffer size)
+                int copy_len = evt->data_len;
+                if (copy_len > sizeof(http_response_buffer) - 1) {
+                    copy_len = sizeof(http_response_buffer) - 1;
+                }
+                memcpy(http_response_buffer, evt->data, copy_len);
+                http_response_buffer[copy_len] = '\0';
+                ESP_LOGI(TAG, "HTTP Response from example.com (first %d bytes):", copy_len);
+                ESP_LOGI(TAG, "%s", http_response_buffer);
+            }
+            break;
+        case HTTP_EVENT_ON_FINISH:
+            ESP_LOGD(TAG, "HTTP_EVENT_ON_FINISH");
+            break;
+        case HTTP_EVENT_DISCONNECTED:
+            ESP_LOGD(TAG, "HTTP_EVENT_DISCONNECTED");
+            break;
+        case HTTP_EVENT_REDIRECT:
+            ESP_LOGD(TAG, "HTTP_EVENT_REDIRECT");
+            break;
+    }
+    return ESP_OK;
+}
+
+// Function to perform HTTP GET request to example.com
+void http_get_example_com(void)
+{
+    ESP_LOGI(TAG, "Starting HTTP GET request to example.com...");
+    
+    esp_http_client_config_t config = {
+        .url = "http://example.com",
+        .event_handler = http_event_handler,
+        .timeout_ms = 10000,
+    };
+    
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    esp_err_t err = esp_http_client_perform(client);
+    
+    if (err == ESP_OK) {
+        int status_code = esp_http_client_get_status_code(client);
+        int content_length = esp_http_client_get_content_length(client);
+        ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %d", status_code, content_length);
+    } else {
+        ESP_LOGE(TAG, "HTTP GET request failed: %s", esp_err_to_name(err));
+    }
+    
+    esp_http_client_cleanup(client);
+}
 
 // HTML page template
 static const char* html_page = 
@@ -190,6 +260,9 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
             ESP_LOGI(TAG, "HTTP Server started. Access web interface at: http://" IPSTR, IP2STR(&ip_info->ip));
         }
     }
+
+    // Perform HTTP GET request to example.com
+    http_get_example_com();
 }
 
 void app_main(void)
